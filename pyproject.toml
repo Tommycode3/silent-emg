@@ -1,0 +1,17 @@
+[project]
+name = "silent-emg"
+version = "0.1.0"
+description = "Decode silently mouthed speech from facial and neck surface EMG (Gaddy & Klein 2020 data)."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Tommaso Maggiolo", email = "maggiolotommaso@gmail.com" }]
+dependencies = ["numpy>=1.26", "scipy>=1.11", "scikit-learn>=1.4", "matplotlib>=3.8", "torch>=2.2"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["silent_emg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
