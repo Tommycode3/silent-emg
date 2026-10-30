@@ -55,7 +55,7 @@ class ConvTransformerCTC(nn.Module):
     stride = 8
 
     def __init__(self, in_ch: int = 8, vocab: int = 38, d: int = 128, layers: int = 3, heads: int = 4,
-                 dropout: float = 0.2):
+                 dropout: float = 0.3):
         super().__init__()
         self.conv = nn.Sequential(ResBlock(in_ch, d // 4, 2), ResBlock(d // 4, d // 2, 2), ResBlock(d // 2, d, 2))
         self.pe = SinusoidalPE(d)

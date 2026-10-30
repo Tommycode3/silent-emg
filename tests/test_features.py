@@ -31,3 +31,22 @@ def test_stack_context():
     assert s.shape == (10, 5)
     np.testing.assert_array_equal(s[5], [3, 4, 5, 6, 7])
     np.testing.assert_array_equal(s[0], [0, 0, 0, 1, 2])
+
+
+def test_hudgins_and_utterance_features():
+    from silent_emg.classical import HUDGINS, hudgins, utterance_features
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(1000, 8))
+    h = hudgins(x)
+    assert h.shape == (8, len(HUDGINS))
+    assert np.all((h[:, 2] > 0.3) & (h[:, 2] < 0.7))  # white noise crosses zero about every other sample
+    f = utterance_features(x, segments=4)
+    assert f.shape == (5 * 8 * len(HUDGINS) + 1,)
+    assert utterance_features(x, channels=[0, 1]).shape == (5 * 2 * len(HUDGINS) + 1,)
+
+
+def test_slot_parsing_roundtrip():
+    from silent_emg.classical import slot_labels, slots_from_transcript
+    from silent_emg.spoken import spoken
+    for w in ["08:11 PM", "July 07 2018", "Monday June 30", "May 17 2008", "12:00 AM"]:
+        assert slots_from_transcript(spoken(w)) == slot_labels(w), w

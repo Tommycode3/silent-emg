@@ -67,6 +67,10 @@ def _batch(xs, ys, idx, device, augment=False, rng=None):
         if augment:
             x = x * rng.normal(1.0, 0.1, size=(1, x.shape[1])).astype(np.float32)
             x = x + rng.normal(0, 0.05, size=x.shape).astype(np.float32)
+            for _ in range(2):  # time masking: zero two random spans of up to 80 ms
+                w = int(rng.integers(0, 80))
+                s0 = int(rng.integers(0, max(1, len(x) - w)))
+                x[s0: s0 + w] = 0
         X[k, : len(x)] = x
     tgt = [torch.tensor(ys[i]) for i in idx] if ys is not None else None
     return torch.from_numpy(X).to(device), torch.tensor(lens), tgt
@@ -85,20 +89,21 @@ def _forward(model, X, lens):
     return model(X), lens
 
 
-def predict(model, xs, device, batch_size=16) -> list[str]:
+def predict(model, xs, device, batch_size=16, return_logprobs=False):
     model.eval()
-    hyps = []
+    hyps, lps = [], []
     with torch.no_grad():
         for s in range(0, len(xs), batch_size):
             idx = list(range(s, min(len(xs), s + batch_size)))
             X, lens, _ = _batch(xs, None, idx, device)
             logits, out_lens = _forward(model, X, lens)
-            lp = logits.float().cpu().numpy()
+            lp = torch.log_softmax(logits.float(), -1).cpu().numpy()
             hyps += [greedy_decode(lp[k, : out_lens[k]]) for k in range(len(idx))]
-    return hyps
+            lps += [lp[k, : out_lens[k]].astype(np.float16) for k in range(len(idx))]
+    return (hyps, lps) if return_logprobs else hyps
 
 
-def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print):
+def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print, init_state=None):
     """Train one model. Returns (model, normaliser, history). Texts are already clean strings."""
     torch.manual_seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
@@ -113,6 +118,8 @@ def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print):
         model = ConvTransformerCTC(len(cfg.channels), VOCAB_SIZE, cfg.d_model, cfg.layers)
     else:
         model = LinearCTC(xtr[0].shape[1], VOCAB_SIZE)
+    if init_state is not None:  # e.g. weights pre-trained on the open-vocabulary sessions
+        model.load_state_dict(init_state)
     model.to(device)
     lr = cfg.lr if cfg.model == "neural" else 3e-3
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=cfg.weight_decay)
@@ -158,5 +165,5 @@ def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print):
 def evaluate(model, norm, sig, txt, cfg: Config):
     device = next(model.parameters()).device
     xs = [norm(x) for x in make_inputs(sig, cfg)]
-    hyps = predict(model, xs, device)
-    return {"cer": cer(txt, hyps), "wer": wer(txt, hyps), "hyps": hyps}
+    hyps, lps = predict(model, xs, device, return_logprobs=True)
+    return {"cer": cer(txt, hyps), "wer": wer(txt, hyps), "hyps": hyps, "logprobs": lps}

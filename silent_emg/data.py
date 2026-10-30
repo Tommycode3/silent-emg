@@ -21,6 +21,7 @@ import numpy as np
 
 from . import N_CHANNELS
 from .preprocess import preprocess
+from .spoken import spoken
 from .text import clean_text
 
 SUBSETS = {
@@ -100,7 +101,11 @@ class Corpus:
         return np.asarray(self.emg[it["offset"]: it["offset"] + it["length"]])
 
     def text(self, i: int) -> str:
-        return clean_text(self.index[i]["text"])
+        """Training target. Closed-vocabulary prompts are converted to spoken words."""
+        t = self.index[i]["text"]
+        if self.index[i].get("book") == "datedata.txt":
+            t = spoken(t)
+        return clean_text(t)
 
     @property
     def sessions(self) -> list[str]:

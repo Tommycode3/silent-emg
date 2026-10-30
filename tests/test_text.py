@@ -30,3 +30,16 @@ def test_align():
     pairs = align("abc", "axc")
     assert pairs == [("a", "a"), ("b", "x"), ("c", "c")]
     assert ("b", None) in align("abc", "ac")
+
+
+def test_spoken_forms():
+    from silent_emg.spoken import spoken
+    assert spoken("08:11 PM") == "eight eleven pm"
+    assert spoken("06:05 AM") == "six oh five am"
+    assert spoken("07:00 AM") == "seven oclock am"
+    assert spoken("July 07 2018") == "july seventh twenty eighteen"
+    assert spoken("April 19 1959") == "april nineteenth nineteen fifty nine"
+    assert spoken("May 17 2008") == "may seventeenth two thousand eight"
+    assert spoken("January 05 1907") == "january fifth nineteen oh seven"
+    assert spoken("Monday June 30") == "monday june thirtieth"
+    assert spoken("Sunday May 21") == "sunday may twenty first"

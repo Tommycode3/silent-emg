@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -24,6 +25,8 @@ from silent_emg.sysmem import wait_for_memory  # noqa: E402
 from silent_emg.train import Config, evaluate, fit  # noqa: E402
 
 OUT = ROOT / "results" / "runs.jsonl"
+PRETRAIN = ROOT / "runs" / "open_vocab_session_s0.pt"
+LOGITS = ROOT / "runs" / "logprobs"
 ALL = list(range(8))
 ABLATIONS = {f"drop_{c}": [k for k in ALL if k != c] for c in ALL} | {
     "face_only": FACE_CHANNELS, "neck_only": NECK_CHANNELS, "throat_only": [3],
@@ -36,8 +39,9 @@ def done_keys():
     return {json.loads(line)["key"] for line in OUT.read_text().splitlines() if line.strip()}
 
 
-def run(key, corpus_tr, tr, corpus_te, va, te, cfg, shuffle=False, keep_hyps=False, extra=None):
-    if key in done_keys():
+def run(key, corpus_tr, tr, corpus_te, va, te, cfg, shuffle=False, keep_hyps=False, extra=None,
+        init=None, save=None):
+    if key in done_keys() and (save is None or Path(save).exists()):
         return
     wait_for_memory(25.0)
     S = lambda c, ix: [c.signal(i) for i in ix]  # noqa: E731
@@ -48,7 +52,10 @@ def run(key, corpus_tr, tr, corpus_te, va, te, cfg, shuffle=False, keep_hyps=Fal
         ytr, yva = list(rng.permutation(ytr)), list(rng.permutation(yva))
     print(f"[{time.strftime('%H:%M:%S')}] {key}: train {len(tr)} val {len(va)} test {len(te)}", flush=True)
     t0 = time.time()
-    model, norm, hist = fit(S(corpus_tr, tr), ytr, S(corpus_te, va), yva, cfg)
+    init_state = torch.load(init, map_location="cpu") if init else None
+    model, norm, hist = fit(S(corpus_tr, tr), ytr, S(corpus_te, va), yva, cfg, init_state=init_state)
+    if save:
+        torch.save({k: v.cpu() for k, v in model.state_dict().items()}, save)
     res = evaluate(model, norm, S(corpus_te, te), T(corpus_te, te), cfg)
     rec = {"key": key, "model": cfg.model, "seed": cfg.seed, "channels": cfg.channels, "shuffled": shuffle,
            "cer": res["cer"], "wer": res["wer"], "best_val_cer": min(h["val_cer"] for h in hist),
@@ -56,6 +63,8 @@ def run(key, corpus_tr, tr, corpus_te, va, te, cfg, shuffle=False, keep_hyps=Fal
            "history": hist} | (extra or {})
     if keep_hyps:
         rec["refs"], rec["hyps"] = T(corpus_te, te), res["hyps"]
+        LOGITS.mkdir(parents=True, exist_ok=True)  # per-frame log-probabilities, for grammar decoding
+        np.savez_compressed(LOGITS / (key.replace("/", "__") + ".npz"), *res["logprobs"])
     print(f"    -> test CER {res['cer']:.3f} WER {res['wer']:.3f}", flush=True)
     OUT.parent.mkdir(exist_ok=True)
     with OUT.open("a") as f:
@@ -75,40 +84,19 @@ def main():
     rs = random_split(len(cs), 30, 100, seed=0)  # paper protocol: 30 val / 100 test / 370 train
     bs = block_split(len(cs), 30, 100)
     check_disjoint(*rs); check_disjoint(*bs)
-    neural_epochs, linear_epochs = 120, 120
+    NEURAL = dict(model="neural", epochs=80, lr=1e-3, eval_every=4, patience=6)
+    LINEAR = dict(model="linear", epochs=100, eval_every=5, patience=8)
+    ss3 = list(seeds)[:3]
 
-    if want("E1"):  # closed vocabulary, random utterance split
+    if want("E1"):  # closed vocabulary, random utterance split (paper protocol)
         for s in seeds:
-            for m, ep in (("linear", linear_epochs), ("neural", neural_epochs)):
-                cfg = Config(model=m, epochs=ep, seed=s)
-                run(f"E1/{m}/s{s}", cs, rs[0], cs, rs[1], rs[2], cfg, keep_hyps=True, extra={"exp": "E1"})
-                run(f"E1/{m}/shuffled/s{s}", cs, rs[0], cs, rs[1], rs[2], cfg, shuffle=True, extra={"exp": "E1"})
-
-    if want("E2"):  # closed vocabulary, contiguous block split (later recordings held out)
-        for s in seeds:
-            for m, ep in (("linear", linear_epochs), ("neural", neural_epochs)):
-                run(f"E2/{m}/s{s}", cs, bs[0], cs, bs[1], bs[2], Config(model=m, epochs=ep, seed=s),
-                    extra={"exp": "E2"})
-
-    if want("E3"):  # train on vocalised EMG, test on silent EMG (same test utterances as E1)
-        cv = Corpus.load(a.data, "closed_voiced")
-        held = {cs.text(i) for i in np.concatenate([rs[1], rs[2]])}
-        vtr = np.array([i for i in range(len(cv)) if cv.text(i) not in held])
-        for s in seeds:
-            run(f"E3/neural/voiced_only/s{s}", cv, vtr, cs, rs[1], rs[2],
-                Config(model="neural", epochs=neural_epochs, seed=s), extra={"exp": "E3", "train": "voiced"})
-
-    if want("E4"):  # electrode ablations, closed vocabulary random split
-        for name, ch in ABLATIONS.items():
-            for s in seeds:
-                run(f"E4/linear/{name}/s{s}", cs, rs[0], cs, rs[1], rs[2],
-                    Config(model="linear", epochs=linear_epochs, seed=s, channels=ch),
-                    extra={"exp": "E4", "ablation": name})
-        for name, ch in ABLATIONS.items():
-            for s in list(seeds)[:3]:
-                run(f"E4/neural/{name}/s{s}", cs, rs[0], cs, rs[1], rs[2],
-                    Config(model="neural", epochs=neural_epochs, seed=s, channels=ch),
-                    extra={"exp": "E4", "ablation": name})
+            run(f"E1/neural/s{s}", cs, rs[0], cs, rs[1], rs[2], Config(**NEURAL, seed=s), keep_hyps=True,
+                extra={"exp": "E1"})
+        for s in ss3:
+            run(f"E1/neural/shuffled/s{s}", cs, rs[0], cs, rs[1], rs[2], Config(**NEURAL, seed=s), shuffle=True,
+                keep_hyps=True, extra={"exp": "E1"})
+            run(f"E1/linear/s{s}", cs, rs[0], cs, rs[1], rs[2], Config(**LINEAR, seed=s), keep_hyps=True,
+                extra={"exp": "E1"})
 
     if want("E5"):  # open vocabulary: held-out session versus random utterances of matched size
         co = Corpus.load(a.data, "open_silent")
@@ -117,15 +105,42 @@ def main():
         nv, nt = len(ss[1]), len(ss[2])
         rr = (np.sort(perm[nv + nt:]), np.sort(perm[:nv]), np.sort(perm[nv:nv + nt]))
         check_disjoint(*ss); check_disjoint(*rr)
-        for s in list(seeds)[:3]:
+        OPEN = NEURAL | dict(epochs=40, eval_every=2, patience=6)
+        for s in range(2):
             for split_name, sp in (("session", ss), ("random", rr)):
-                for m in ("neural", "linear"):
-                    cfg = Config(model=m, epochs=60, seed=s, patience=10)
-                    run(f"E5/{m}/{split_name}/s{s}", co, sp[0], co, sp[1], sp[2], cfg,
-                        extra={"exp": "E5", "split": split_name})
-            run(f"E5/neural/session/shuffled/s{s}", co, ss[0], co, ss[1], ss[2],
-                Config(model="neural", epochs=60, seed=s, patience=10), shuffle=True,
-                extra={"exp": "E5", "split": "session"})
+                save = PRETRAIN if (split_name, s) == ("session", 0) else None
+                run(f"E5/neural/{split_name}/s{s}", co, sp[0], co, sp[1], sp[2], Config(**OPEN, seed=s),
+                    extra={"exp": "E5", "split": split_name}, save=save)
+        run("E5/neural/session/shuffled/s0", co, ss[0], co, ss[1], ss[2], Config(**OPEN, seed=0), shuffle=True,
+            extra={"exp": "E5", "split": "session"})
+
+    if want("E6"):  # closed vocabulary, initialised from the open-vocabulary model of E5 (seed 0)
+        if not PRETRAIN.exists():
+            raise SystemExit("run E5 first: it writes " + str(PRETRAIN))
+        for s in ss3:
+            run(f"E6/neural/pretrained/s{s}", cs, rs[0], cs, rs[1], rs[2], Config(**NEURAL, seed=s) ,
+                init=str(PRETRAIN), keep_hyps=True, extra={"exp": "E6"})
+
+    if want("E3"):  # train on vocalised EMG, test on silent EMG (same test utterances as E1)
+        cv = Corpus.load(a.data, "closed_voiced")
+        held = {cs.index[i]["text"] for i in np.concatenate([rs[1], rs[2]])}
+        vtr = np.array([i for i in range(len(cv)) if cv.index[i]["text"] not in held])
+        for s in ss3:
+            run(f"E3/neural/voiced_only/s{s}", cv, vtr, cs, rs[1], rs[2], Config(**NEURAL, seed=s),
+                keep_hyps=True, extra={"exp": "E3", "train": "voiced"})
+
+    if want("E2"):  # closed vocabulary, contiguous block split (later recordings held out)
+        for s in ss3:
+            run(f"E2/neural/s{s}", cs, bs[0], cs, bs[1], bs[2], Config(**NEURAL, seed=s), keep_hyps=True,
+                extra={"exp": "E2"})
+
+    if want("E4"):  # electrode groups, closed vocabulary random split
+        for name in ("no_throat", "face_only", "neck_only"):
+            for s in ss3:
+                run(f"E4/neural/{name}/s{s}", cs, rs[0], cs, rs[1], rs[2],
+                    Config(**NEURAL, seed=s, channels=ABLATIONS[name]), keep_hyps=True,
+                    extra={"exp": "E4", "ablation": name})
+
 
 
 if __name__ == "__main__":

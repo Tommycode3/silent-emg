@@ -28,5 +28,5 @@ def test_build_cache_roundtrip(tmp_path):
     c = Corpus.load(tmp_path / "proc", "closed_silent")
     assert len(c) == 3
     assert c.signal(1).shape == (800, 8)
-    assert c.text(0) == "08 11 pm"
+    assert c.text(0) == "eight eleven pm"
     assert isinstance(c.emg, np.memmap)
