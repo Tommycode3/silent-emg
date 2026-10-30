@@ -31,6 +31,8 @@ class Config:
     d_model: int = 128
     layers: int = 3
     patience: int = 20  # evaluations without val improvement before stopping
+    max_gpu_gb: float = 12.0
+    max_batch_samples: int = 64000  # padded length x batch size cap (input samples), bounds attention memory
 
 
 def pick_device(name: str) -> torch.device:
@@ -91,17 +93,37 @@ def _forward(model, X, lens):
     return model(X), lens
 
 
-def predict(model, xs, device, batch_size=16, return_logprobs=False):
+def make_batches(lengths, order, batch_size, max_samples):
+    """Consecutive groups from `order` with at most batch_size items and batch x max_len <= max_samples."""
+    batches, cur, cur_max = [], [], 0
+    for i in order:
+        m = max(cur_max, lengths[i])
+        if cur and (len(cur) + 1 > batch_size or (len(cur) + 1) * m > max_samples):
+            batches.append(cur); cur, m = [], lengths[i]
+        cur.append(int(i)); cur_max = m
+    if cur:
+        batches.append(cur)
+    return batches
+
+
+def _free(device):
+    if device.type == "mps":
+        torch.mps.empty_cache()
+
+
+def predict(model, xs, device, batch_size=16, return_logprobs=False, max_samples=64000):
     model.eval()
-    hyps, lps = [], []
+    lengths = [len(x) for x in xs]
+    hyps, lps = [None] * len(xs), [None] * len(xs)
     with torch.no_grad():
-        for s in range(0, len(xs), batch_size):
-            idx = list(range(s, min(len(xs), s + batch_size)))
+        for idx in make_batches(lengths, np.argsort(lengths), batch_size, max_samples):
             X, lens, _ = _batch(xs, None, idx, device)
             logits, out_lens = _forward(model, X, lens)
             lp = torch.log_softmax(logits.float(), -1).cpu().numpy()
-            hyps += [greedy_decode(lp[k, : out_lens[k]]) for k in range(len(idx))]
-            lps += [lp[k, : out_lens[k]].astype(np.float16) for k in range(len(idx))]
+            for k, i in enumerate(idx):
+                hyps[i] = greedy_decode(lp[k, : out_lens[k]])
+                lps[i] = lp[k, : out_lens[k]].astype(np.float16)
+    _free(device)
     return (hyps, lps) if return_logprobs else hyps
 
 
@@ -125,7 +147,8 @@ def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print, init_sta
     model.to(device)
     lr = cfg.lr if cfg.model == "neural" else 3e-3
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=cfg.weight_decay)
-    steps_per_epoch = int(np.ceil(len(xtr) / cfg.batch_size))
+    tr_len = [len(x) for x in xtr]
+    steps_per_epoch = len(make_batches(tr_len, np.arange(len(xtr)), cfg.batch_size, cfg.max_batch_samples))
     total = cfg.epochs * steps_per_epoch
     warm = max(1, min(500, total // 10))
     sched = torch.optim.lr_scheduler.LambdaLR(
@@ -135,10 +158,8 @@ def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print, init_sta
     t0 = time.time()
     for ep in range(cfg.epochs):
         model.train()
-        order = rng.permutation(len(xtr))
         losses = []
-        for s in range(0, len(order), cfg.batch_size):
-            idx = order[s: s + cfg.batch_size]
+        for idx in make_batches(tr_len, rng.permutation(len(xtr)), cfg.batch_size, cfg.max_batch_samples):
             X, lens, tgt = _batch(xtr, ytr, idx, device, augment=cfg.model == "neural", rng=rng)
             logits, out_lens = _forward(model, X, lens)
             lp = F.log_softmax(logits.float(), -1).transpose(0, 1).cpu()
@@ -150,14 +171,18 @@ def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print, init_sta
             opt.step()
             sched.step()
             losses.append(loss.item())
+        _free(device)
         if (ep + 1) % cfg.eval_every == 0 or ep == cfg.epochs - 1:
-            v = cer(val_txt, predict(model, xva, device))
+            v = cer(val_txt, predict(model, xva, device, max_samples=cfg.max_batch_samples))
             hist.append({"epoch": ep + 1, "loss": float(np.mean(losses)), "val_cer": v})
             if v < best:
                 best, best_state, bad = v, copy.deepcopy(model.state_dict()), 0
             else:
                 bad += 1
-            log(f"  ep {ep + 1:3d} loss {np.mean(losses):.3f} val CER {v:.3f} ({time.time() - t0:.0f}s)")
+            mem = torch.mps.driver_allocated_memory() / 1e9 if device.type == "mps" else 0.0
+            log(f"  ep {ep + 1:3d} loss {np.mean(losses):.3f} val CER {v:.3f} ({time.time() - t0:.0f}s, mps {mem:.1f} GB)")
+            if mem > cfg.max_gpu_gb:
+                raise MemoryError(f"MPS allocation {mem:.1f} GB exceeds {cfg.max_gpu_gb} GB")
             if bad >= cfg.patience:
                 break
     model.load_state_dict(best_state)
@@ -167,5 +192,5 @@ def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print, init_sta
 def evaluate(model, norm, sig, txt, cfg: Config):
     device = next(model.parameters()).device
     xs = [norm(x) for x in make_inputs(sig, cfg)]
-    hyps, lps = predict(model, xs, device, return_logprobs=True)
+    hyps, lps = predict(model, xs, device, return_logprobs=True, max_samples=cfg.max_batch_samples)
     return {"cer": cer(txt, hyps), "wer": wer(txt, hyps), "hyps": hyps, "logprobs": lps}

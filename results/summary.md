@@ -5,6 +5,11 @@
 | closed vocab, random split | conv + transformer, shuffled labels (control) | 3 | 83.4 ± 7.5 | 103.5 ± 3.1 | 74.9 ± 1.7 | 96.2 ± 4.6 | 0.3 ± 0.6 |
 | closed vocab, random split | linear on TD features (Jou et al.) | 3 | 78.0 ± 2.6 | 110.0 ± 7.2 | 68.1 ± 2.7 | 92.2 ± 3.2 | 0.3 ± 0.6 |
 | closed vocab, random split | conv + transformer | 5 | 60.6 ± 3.0 | 99.5 ± 0.8 | 46.2 ± 4.4 | 70.0 ± 5.8 | 1.2 ± 1.1 |
+| closed vocab, last 100 utterances held out | conv + transformer | 3 | 62.9 ± 1.6 | 100.5 ± 1.3 | 47.1 ± 4.2 | 72.7 ± 6.6 | 0.7 ± 1.2 |
+| train vocalised, test silent | conv + transformer | 3 | 81.7 ± 7.7 | 100.3 ± 0.6 | 69.8 ± 2.9 | 90.0 ± 2.2 | 0.3 ± 0.6 |
+| closed vocab, without throat electrode | conv + transformer | 3 | 55.1 ± 8.4 | 94.8 ± 4.5 | 44.6 ± 3.7 | 68.7 ± 5.3 | 0.3 ± 0.6 |
+| closed vocab, 6 face electrodes | conv + transformer | 3 | 55.3 ± 2.5 | 97.7 ± 1.5 | 47.0 ± 2.8 | 72.5 ± 3.4 | 1.3 ± 1.2 |
+| closed vocab, 2 neck electrodes | conv + transformer | 3 | 71.4 ± 5.2 | 100.9 ± 2.0 | 60.2 ± 1.7 | 84.4 ± 2.5 | 0.0 |
 
 ### Slot classification, balanced accuracy %
 

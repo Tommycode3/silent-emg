@@ -8,12 +8,16 @@ Usage: python scripts/run_experiments.py [--only E1 E2 ...] [--seeds 5]
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 import numpy as np
-import torch
+
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.3")  # cap the MPS allocator
+os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.25")
+import torch  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -105,6 +109,9 @@ def main():
         nv, nt = len(ss[1]), len(ss[2])
         rr = (np.sort(perm[nv + nt:]), np.sort(perm[:nv]), np.sort(perm[nv:nv + nt]))
         check_disjoint(*ss); check_disjoint(*rr)
+        # training utterances longer than 15 s (about 4%) are skipped to bound memory; val/test keep everything
+        short = lambda ix: np.array([i for i in ix if co.index[i]["length"] <= 15000])  # noqa: E731
+        ss, rr = (short(ss[0]), ss[1], ss[2]), (short(rr[0]), rr[1], rr[2])
         OPEN = NEURAL | dict(epochs=40, eval_every=2, patience=6)
         for s in range(2):
             for split_name, sp in (("session", ss), ("random", rr)):

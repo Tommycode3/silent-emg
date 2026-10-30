@@ -50,3 +50,11 @@ def test_channel_subset_changes_input_width():
     cfg = Config(model="neural", epochs=1, device="cpu", d_model=32, layers=1, channels=[0, 1, 2])
     model, _, _ = fit(*tr, *va, cfg, log=lambda *a: None)
     assert model.conv[0].c1.in_channels == 3
+
+
+def test_make_batches_respects_budget():
+    from silent_emg.train import make_batches
+    lengths = [100, 900, 300, 500, 50, 1000]
+    b = make_batches(lengths, np.arange(6), batch_size=3, max_samples=1500)
+    assert sorted(i for x in b for i in x) == list(range(6))
+    assert all(len(x) <= 3 and len(x) * max(lengths[i] for i in x) <= 1500 or len(x) == 1 for x in b)

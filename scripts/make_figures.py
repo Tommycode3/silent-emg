@@ -154,7 +154,7 @@ def results(groups):
     for i, (lab, k) in enumerate(spec):
         rs = groups[k]
         _bar(ax, i - 0.18, [r["cer"] for r in rs], C_CTRL if "shuffled" in k else C_NN, 0.36,
-             "greedy" if i == 0 else None)
+             "greedy (grey: shuffled-label control)" if i == 1 else None)
         gr = [r["grammar"]["cer"] for r in rs if "grammar" in r]
         if gr:
             _bar(ax, i + 0.18, gr, C_NNG, 0.36, "grammar-constrained" if i == 1 else None)
@@ -198,8 +198,8 @@ def ablation(groups, cl):
     ax.legend(frameon=False, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=4)
     ax.set_title("Hudgins features + logistic regression (5x5-fold CV)", loc="left")
     ax = axes[1]
-    spec = [("all 8", "E1/neural"), ("without throat", "E4/neural/no_throat"), ("face only (6)", "E4/neural/face_only"),
-            ("neck only (2)", "E4/neural/neck_only")]
+    spec = [("all 8", "E1/neural"), ("without\nthroat", "E4/neural/no_throat"), ("face only\n(6)", "E4/neural/face_only"),
+            ("neck only\n(2)", "E4/neural/neck_only")]
     spec = [s for s in spec if s[1] in groups]
     for i, (lab, k) in enumerate(spec):
         _bar(ax, i - 0.18, [r["cer"] for r in groups[k]], C_NN, 0.36, "greedy" if i == 0 else None)
