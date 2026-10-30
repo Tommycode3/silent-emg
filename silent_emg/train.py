@@ -171,6 +171,7 @@ def fit(train_sig, train_txt, val_sig, val_txt, cfg: Config, log=print, init_sta
             opt.step()
             sched.step()
             losses.append(loss.item())
+            del X, logits, lp, loss
         _free(device)
         if (ep + 1) % cfg.eval_every == 0 or ep == cfg.epochs - 1:
             v = cer(val_txt, predict(model, xva, device, max_samples=cfg.max_batch_samples))

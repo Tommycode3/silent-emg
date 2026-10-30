@@ -109,16 +109,22 @@ def main():
         nv, nt = len(ss[1]), len(ss[2])
         rr = (np.sort(perm[nv + nt:]), np.sort(perm[:nv]), np.sort(perm[nv:nv + nt]))
         check_disjoint(*ss); check_disjoint(*rr)
-        # training utterances longer than 15 s (about 4%) are skipped to bound memory; val/test keep everything
+        # training utterances longer than 15 s (7% of them) are skipped to bound memory; val/test keep everything
         short = lambda ix: np.array([i for i in ix if co.index[i]["length"] <= 15000])  # noqa: E731
         ss, rr = (short(ss[0]), ss[1], ss[2]), (short(rr[0]), rr[1], rr[2])
         OPEN = NEURAL | dict(epochs=40, eval_every=2, patience=6)
         for s in range(2):
-            for split_name, sp in (("session", ss), ("random", rr)):
+            # the random-utterance comparison uses seed 0 only (compute budget on a shared machine)
+            for split_name, sp in (("session", ss), ("random", rr))[: 2 if s == 0 else 1]:
                 save = PRETRAIN if (split_name, s) == ("session", 0) else None
-                run(f"E5/neural/{split_name}/s{s}", co, sp[0], co, sp[1], sp[2], Config(**OPEN, seed=s),
+                # seed 0 ran with a 64k-sample batch budget; later runs hit the MPS memory cap with it
+                # on this shared machine, so they use half (fewer utterances per batch, same epochs)
+                budget = 64000 if s == 0 else 32000
+                run(f"E5/neural/{split_name}/s{s}", co, sp[0], co, sp[1], sp[2],
+                    Config(**OPEN, seed=s, max_batch_samples=budget),
                     extra={"exp": "E5", "split": split_name}, save=save)
-        run("E5/neural/session/shuffled/s0", co, ss[0], co, ss[1], ss[2], Config(**OPEN, seed=0), shuffle=True,
+        run("E5/neural/session/shuffled/s0", co, ss[0], co, ss[1], ss[2],
+            Config(**OPEN, seed=0, max_batch_samples=32000), shuffle=True,
             extra={"exp": "E5", "split": "session"})
 
     if want("E6"):  # closed vocabulary, initialised from the open-vocabulary model of E5 (seed 0)

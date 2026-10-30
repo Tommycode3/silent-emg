@@ -2,7 +2,7 @@
 
 ![hero](figures/hero.png)
 
-@@INTRO@@
+It reads silently mouthed dates and times ("monday june thirtieth", "eight eleven pm") from eight surface EMG electrodes on the face and neck, using the public recordings of one speaker by Gaddy & Klein (2020). On 100 held-out utterances, a small convolution + transformer CTC model with a date/time grammar has a 70% word error rate, against 96% for the same model trained on shuffled labels, and names the weekday in 59% of cases (balanced accuracy, chance 14%). A logistic regression on classic time-domain features does as well on the single-word questions (weekday 56% under cross-validation).
 
 <!-- TODO(Tommaso): your own words on why -->
 
@@ -36,7 +36,91 @@ python -m pytest -q
 
 ## Results
 
-@@RESULTS@@
+All numbers are on held-out test utterances, mean ± sample standard deviation over training seeds (the data split is fixed). Full tables, including every electrode subset, are in [results/summary.md](results/summary.md); raw per-run records are in `results/runs.jsonl`, `results/grammar.json` and `results/classical.json`.
+
+### Closed vocabulary: sentence decoding (CTC)
+
+100 test utterances, 370 train, 30 validation, one recording session. WER and CER are on the spoken-form text.
+
+| model | seeds | CER % greedy | CER % grammar | WER % grammar |
+|---|---|---|---|---|
+| best single constant sentence (picked using the test labels) | | 70.2 | | 98.5 |
+| conv + transformer, shuffled labels (control) | 3 | 83.4 ± 7.5 | 74.9 ± 1.7 | 96.2 ± 4.6 |
+| linear on Jou TD features | 3 | 78.0 ± 2.6 | 68.1 ± 2.7 | 92.2 ± 3.2 |
+| conv + transformer | 5 | 60.6 ± 3.0 | 46.2 ± 4.4 | 70.0 ± 5.8 |
+@@E6ROW@@
+
+Greedy WER is about 100% for every model: without the grammar almost no word is spelled exactly right. With the grammar, the network recovers part of the prompt; under 2% of test sentences are fully correct.
+
+![results](figures/results.png)
+
+| condition (conv + transformer, 3 seeds) | CER % grammar | WER % grammar |
+|---|---|---|
+| random split (5 seeds, from above) | 46.2 ± 4.4 | 70.0 ± 5.8 |
+| contiguous split: last 100 recordings held out | 47.1 ± 4.2 | 72.7 ± 6.6 |
+| trained on vocalised EMG only, tested on silent | 69.8 ± 2.9 | 90.0 ± 2.2 |
+
+Holding out the last 100 recordings instead of a random 100 costs about 3 WER points, within one standard deviation. Training on vocalised EMG of the same prompts and testing on silent EMG is close to the shuffled-label control, which matches the gap between speaking modes that motivated the original paper.
+
+### Closed vocabulary: which word was mouthed
+
+The templates give four closed-set questions. Balanced accuracy %, chance in the second column.
+
+| task | chance | Hudgins + logreg, 5x5-fold CV | Hudgins + GBM, CV | logreg, contiguous folds | logreg, shuffled labels | log duration only |
+|---|---|---|---|---|---|---|
+| template (3) | 33.3 | 96.9 ± 0.3 | 94.5 ± 0.2 | 97.2 | 35.4 ± 1.1 | 61.6 ± 0.8 |
+| AM vs PM (2) | 50.0 | 85.5 ± 0.6 | 82.3 ± 0.4 | 84.6 | 48.4 ± 2.8 | 50.1 ± 1.5 |
+| weekday (7) | 14.3 | 55.6 ± 1.7 | 46.8 ± 1.8 | 52.0 | 14.6 ± 2.3 | 13.1 ± 1.7 |
+| month (12) | 8.3 | 28.0 ± 1.7 | 24.2 ± 1.8 | 25.2 | 8.1 ± 0.5 | 11.0 ± 0.7 |
+
+On the same 100 test utterances as the CTC models:
+
+| task | logreg | GBM | conv + transformer, grammar (5 seeds) |
+|---|---|---|---|
+| template | 99.0 | 95.0 | 91.7 ± 5.1 |
+| AM vs PM | 85.6 | 79.3 | 68.8 ± 6.7 |
+| weekday | 43.6 | 51.9 | 58.9 ± 10.5 |
+| month | 19.7 | 24.0 | 25.7 ± 3.9 |
+
+A per-slot classifier on 201 hand-crafted features is as good as the sequence model on these questions; on 100 test items the differences between them are inside the noise (one weekday test item is about 3 points). Template identity is partly given away by duration (61.6% from duration alone), the other three are not.
+
+![confusion](figures/confusion.png)
+
+Saturday and Sunday are the most confused weekdays, and the month confusions are spread out with June, August and September recognised best.
+
+### Electrode ablation
+
+Each model is retrained on the electrode subset.
+
+| electrodes | logreg weekday (CV) | logreg month (CV) | conv + transformer WER % grammar (3 seeds) |
+|---|---|---|---|
+| all 8 | 55.6 ± 1.7 | 28.0 ± 1.7 | 70.0 ± 5.8 (5 seeds) |
+| without throat | 55.4 ± 2.5 | 26.6 ± 0.5 | 68.7 ± 5.3 |
+| face only (6) | 56.7 ± 1.4 | 24.5 ± 0.2 | 72.5 ± 3.4 |
+| neck only (under chin + throat) | 28.5 ± 2.3 | 16.6 ± 2.1 | 84.4 ± 2.5 |
+| throat only | 23.1 ± 2.7 | 15.7 ± 1.7 | not run |
+
+![ablation](figures/ablation.png)
+
+For silent articulation the face electrodes carry most of the information. Removing the throat electrode changes nothing measurable; the two neck electrodes alone keep the template and AM/PM questions well above chance but lose most of the weekday and month information. Dropping any single face electrode costs at most a few points; the largest single drop is the right cheek below the mouth (weekday 55.6 to 48.0).
+
+### Open vocabulary: held-out session
+
+Sentences from books, 7 silent sessions with electrodes re-attached each time. Train on 5 sessions, validate on 5-10, test on 5-11 (190 sentences). Greedy decoding, no language model.
+
+@@E5TABLE@@
+
+### Comparison with Gaddy & Klein (2020)
+
+The paper reports, on the closed vocabulary, 3.6% WER for its full model, 88.8% for a direct-transfer baseline trained on vocalised EMG only, and 64.6% for that baseline without the throat electrode (Table 4). These numbers are not like-for-like with mine:
+
+- Their WER is a human listener transcribing synthesised audio (20 outputs per system), told the prompts are dates and times. Mine is automatic, on text decoded directly from EMG, over 100 test utterances.
+- Their models were trained on the full open-vocabulary data (about 18.6 hours including vocalised EMG and audio) and then fine-tuned on the closed set, with audio-derived targets aligned to the silent EMG. Mine sees only the 370 silent closed-vocabulary training utterances (plus, in the initialised row, 1030 open-vocabulary silent utterances).
+- The split sizes match (370 / 30 / 100), the indices do not.
+
+What does compare in direction: training on vocalised EMG and testing on silent EMG transfers poorly in both (their 88.8% WER, my 90.0% grammar WER against 70.0% when trained on silent EMG). Their baseline improved a lot without the throat electrode (88.8 to 64.6); in my silent-trained models the throat electrode makes no measurable difference, which fits their explanation that the throat channel mainly differs between speaking modes.
+
+Later work by the same author reports about 28% WER on open-vocabulary silent EMG with direct EMG-to-text recognition trained on the full dataset (Gaddy, 2022; figure quoted from the README of dgaddy/silent_speech). The open-vocabulary rows here use 2.0 hours of silent training data, no audio, no vocalised data and no language model, so it is a lower reference point, not a replication.
 
 ## Method
 
@@ -127,7 +211,14 @@ $\mathrm{CER} = (S + D + I) / N$ over characters of the spoken-form text, $\math
 
 ## Limitations
 
-@@LIMITATIONS@@
+- One speaker. Nothing here says how the models would do on another person, and the per-person variation of facial EMG is large.
+- The closed-vocabulary set is a single session, so the "held-out" closed-vocabulary numbers never cross an electrode re-attachment. The only cross-session number is the open-vocabulary row, from one test session and 2 seeds.
+- 100 test utterances. One utterance is 1% WER-weight and 2 to 4 points of slot accuracy; seed-to-seed standard deviations of 5 to 10 points mean that differences under about 5 WER points between rows are not reliable.
+- The spoken-form targets are my reading of the written prompts and were not checked against the audio. My conversion has 73 words, the paper reports 67, so some prompts were read differently (likely years and ordinals). Those words are scored as errors even when the model follows the speaker.
+- Grammar decoding uses knowledge of the prompt templates and of the year range in the training prompts. It is a strong prior and makes the task easier than open recognition.
+- The neural model was tuned only lightly (one learning-rate check on the validation set of the closed vocabulary) and is small (0.6 M parameters) to fit the memory limits of a shared laptop. Larger models, more augmentation, or pretraining on the vocalised and audio data would probably help; I did not try them.
+- Open-vocabulary training skips utterances longer than 15 s (7% of training utterances) and stops at 40 epochs; validation CER had levelled off by then (0.78 at epochs 30 and 40 for seed 0).
+- The slot classifiers and the CTC models are scored on different evaluation schemes in the first slot table (cross-validation versus one 100-utterance test set); the second slot table puts them on the same test set.
 
 ## References
 
@@ -137,4 +228,5 @@ $\mathrm{CER} = (S + D + I) / N$ over characters of the spoken-form text, $\math
 - Jou, S.-C., Schultz, T., Walliczek, M., Kraft, F., & Waibel, A. (2006). Towards continuous speech recognition using surface electromyography. Interspeech 2006. [10.21437/Interspeech.2006-212](https://doi.org/10.21437/Interspeech.2006-212)
 - Hudgins, B., Parker, P., & Scott, R. N. (1993). A new strategy for multifunction myoelectric control. IEEE Transactions on Biomedical Engineering, 40(1), 82-94. [10.1109/10.204774](https://doi.org/10.1109/10.204774)
 - Graves, A., Fernández, S., Gomez, F., & Schmidhuber, J. (2006). Connectionist temporal classification. Proceedings of ICML 2006. [10.1145/1143844.1143891](https://doi.org/10.1145/1143844.1143891)
+- Gaddy, D. (2022). Voicing Silent Speech. PhD dissertation, UC Berkeley, Technical Report UCB/EECS-2022-68. https://www2.eecs.berkeley.edu/Pubs/TechRpts/2022/EECS-2022-68.html (no DOI)
 - Vaswani, A., et al. (2017). Attention Is All You Need. NeurIPS 2017. [10.48550/arXiv.1706.03762](https://doi.org/10.48550/arXiv.1706.03762)

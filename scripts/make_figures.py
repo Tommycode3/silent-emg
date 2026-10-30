@@ -85,7 +85,7 @@ def summary(groups, cl):
         L.append(f"| {t} | {100 * r['chance']:.1f} | {fmt(r['cv_logreg'])} | {fmt(r['cv_gbm'])} | {fmt(r['block_logreg'])} "
                  f"| {fmt(r['shuffled_logreg'])} | {fmt(r['cv_duration_only'])} | {fmt(r['voiced_to_silent_logreg'])} |")
     L += ["", "Same 100 test utterances as the CTC models (E1 split):", "",
-          "| task | logreg | GBM (5 seeds) | conv + transformer, greedy | conv + transformer, grammar |", "|---|---|---|---|---|"]
+          "| task | logreg | GBM | conv + transformer, greedy | conv + transformer, grammar |", "|---|---|---|---|---|"]
     for t in TASKS:
         r = cl["tasks"][t]
         nn = [x["grammar"] for x in groups.get("E1/neural", []) if "grammar" in x]
