@@ -1,4 +1,4 @@
-"""Summarise results/runs.jsonl into results/summary.md and the figures in figures/."""
+"""Summarise results/*.json(l) into results/summary.md and the figures in figures/."""
 
 import json
 import sys
@@ -14,190 +14,236 @@ import numpy as np  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from silent_emg import CHANNEL_SHORT  # noqa: E402
-from silent_emg.text import align  # noqa: E402
+from silent_emg.classical import MONTHS, WEEKDAYS  # noqa: E402
 
 plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
                      "savefig.dpi": 170, "savefig.bbox": "tight"})
-C_LIN, C_NN, C_CTRL = "#8c6d31", "#1f4e79", "#9e9e9e"
+C_LIN, C_GBM, C_NN, C_NNG, C_CTRL = "#a6761d", "#e6ab02", "#7fa7cf", "#1f4e79", "#9e9e9e"
 FIG = ROOT / "figures"
+TASKS = ["template", "ampm", "weekday", "month"]
+TASK_LABEL = {"template": "template\n(3 classes)", "ampm": "AM vs PM\n(2)", "weekday": "weekday\n(7)",
+              "month": "month\n(12)"}
 
 
 def load():
-    runs = [json.loads(line) for line in (ROOT / "results" / "runs.jsonl").read_text().splitlines() if line.strip()]
+    runs = [json.loads(x) for x in (ROOT / "results" / "runs.jsonl").read_text().splitlines() if x.strip()]
+    g = json.loads((ROOT / "results" / "grammar.json").read_text()) if (ROOT / "results" / "grammar.json").exists() else {}
+    for r in runs:
+        if r["key"] in g:
+            r["grammar"] = g[r["key"]]
     groups = defaultdict(list)
     for r in runs:
         groups[r["key"].rsplit("/s", 1)[0]].append(r)
-    return runs, groups
+    cl = json.loads((ROOT / "results" / "classical.json").read_text())
+    return runs, groups, cl
 
 
-def ms(rs, k="cer"):
-    v = np.array([r[k] for r in rs]) * 100
-    return v.mean(), v.std(ddof=1) if len(v) > 1 else 0.0, v
+def msd(v):
+    v = np.asarray(v, float) * 100
+    return v.mean(), (v.std(ddof=1) if len(v) > 1 else 0.0), v
 
 
-def fmt(rs, k):
-    m, s, v = ms(rs, k)
-    return f"{m:.1f} ± {s:.1f}"
+def fmt(v):
+    m, s, vv = msd(v)
+    return f"{m:.1f} ± {s:.1f}" if len(vv) > 1 and np.ptp(vv) > 0 else f"{m:.1f}"
 
 
-ROWS = [
-    ("E1/linear/shuffled", "closed vocab, random split", "linear TD, shuffled labels (control)"),
+CTC_ROWS = [
     ("E1/neural/shuffled", "closed vocab, random split", "conv + transformer, shuffled labels (control)"),
-    ("E1/linear", "closed vocab, random split", "linear TD features + CTC"),
-    ("E1/neural", "closed vocab, random split", "conv + transformer + CTC"),
-    ("E2/linear", "closed vocab, last 100 utterances", "linear TD features + CTC"),
-    ("E2/neural", "closed vocab, last 100 utterances", "conv + transformer + CTC"),
-    ("E3/neural/voiced_only", "train vocalised, test silent", "conv + transformer + CTC"),
-    ("E5/linear/random", "open vocab, random utterances", "linear TD features + CTC"),
-    ("E5/neural/random", "open vocab, random utterances", "conv + transformer + CTC"),
-    ("E5/linear/session", "open vocab, held-out session", "linear TD features + CTC"),
-    ("E5/neural/session", "open vocab, held-out session", "conv + transformer + CTC"),
+    ("E1/linear", "closed vocab, random split", "linear on TD features (Jou et al.)"),
+    ("E1/neural", "closed vocab, random split", "conv + transformer"),
+    ("E6/neural/pretrained", "closed vocab, random split", "conv + transformer, initialised from open vocab"),
+    ("E2/neural", "closed vocab, last 100 utterances held out", "conv + transformer"),
+    ("E3/neural/voiced_only", "train vocalised, test silent", "conv + transformer"),
+    ("E4/neural/no_throat", "closed vocab, without throat electrode", "conv + transformer"),
+    ("E4/neural/face_only", "closed vocab, 6 face electrodes", "conv + transformer"),
+    ("E4/neural/neck_only", "closed vocab, 2 neck electrodes", "conv + transformer"),
+    ("E5/neural/random", "open vocab, random utterances", "conv + transformer"),
+    ("E5/neural/session", "open vocab, held-out session", "conv + transformer"),
     ("E5/neural/session/shuffled", "open vocab, held-out session", "conv + transformer, shuffled labels (control)"),
 ]
 
 
-def summary(groups):
-    lines = ["| setting | model | seeds | test CER % | test WER % |", "|---|---|---|---|---|"]
-    for key, setting, model in ROWS:
-        if key in groups:
-            rs = groups[key]
-            lines.append(f"| {setting} | {model} | {len(rs)} | {fmt(rs, 'cer')} | {fmt(rs, 'wer')} |")
-    abl = ["", "| electrodes kept | linear CER % | neural CER % |", "|---|---|---|"]
-    for name in ["all"] + [k.split("/")[-1] for k in groups if k.startswith("E4/linear/")]:
-        lk, nk = ("E1/linear", "E1/neural") if name == "all" else (f"E4/linear/{name}", f"E4/neural/{name}")
-        cell = lambda k: fmt(groups[k], "cer") if k in groups else "n/a"  # noqa: E731
-        abl.append(f"| {name} | {cell(lk)} | {cell(nk)} |")
-    (ROOT / "results" / "summary.md").write_text("\n".join(lines + abl) + "\n")
-    print("\n".join(lines + abl))
+def summary(groups, cl):
+    L = ["### Sequence decoding (CTC), test set", "",
+         "| setting | model | seeds | CER % greedy | WER % greedy | CER % grammar | WER % grammar | exact % grammar |",
+         "|---|---|---|---|---|---|---|---|"]
+    for key, setting, model in CTC_ROWS:
+        if key not in groups:
+            continue
+        rs = groups[key]
+        gr = [r["grammar"] for r in rs if "grammar" in r]
+        gcell = (lambda k: fmt([x[k] for x in gr])) if gr else (lambda k: "n/a")
+        L.append(f"| {setting} | {model} | {len(rs)} | {fmt([r['cer'] for r in rs])} | {fmt([r['wer'] for r in rs])} "
+                 f"| {gcell('cer')} | {gcell('wer')} | {gcell('exact')} |")
+    L += ["", "### Slot classification, balanced accuracy %", "",
+          "| task | chance | Hudgins + logreg (5x5-fold CV) | Hudgins + GBM (CV) | logreg, contiguous folds "
+          "| logreg, shuffled labels | duration only | logreg, train vocalised, test silent |",
+          "|---|---|---|---|---|---|---|---|"]
+    for t in TASKS:
+        r = cl["tasks"][t]
+        L.append(f"| {t} | {100 * r['chance']:.1f} | {fmt(r['cv_logreg'])} | {fmt(r['cv_gbm'])} | {fmt(r['block_logreg'])} "
+                 f"| {fmt(r['shuffled_logreg'])} | {fmt(r['cv_duration_only'])} | {fmt(r['voiced_to_silent_logreg'])} |")
+    L += ["", "Same 100 test utterances as the CTC models (E1 split):", "",
+          "| task | logreg | GBM (5 seeds) | conv + transformer, greedy | conv + transformer, grammar |", "|---|---|---|---|---|"]
+    for t in TASKS:
+        r = cl["tasks"][t]
+        nn = [x["grammar"] for x in groups.get("E1/neural", []) if "grammar" in x]
+        g1 = fmt([x["slots_greedy"][t] for x in nn]) if nn else "n/a"
+        g2 = fmt([x["slots_grammar"][t] for x in nn]) if nn else "n/a"
+        L.append(f"| {t} | {fmt(r['e1split_logreg'])} | {fmt(r['e1split_gbm'])} | {g1} | {g2} |")
+    L += ["", "### Electrode ablation, Hudgins + logreg, balanced accuracy % (5x5-fold CV)", "",
+          "| electrodes | " + " | ".join(TASKS) + " |", "|---|" + "---|" * len(TASKS)]
+    for name, d in cl["ablation"].items():
+        L.append(f"| {name} | " + " | ".join(fmt(d[t]) for t in TASKS) + " |")
+    (ROOT / "results" / "summary.md").write_text("\n".join(L) + "\n")
+    print("\n".join(L))
 
 
-def bars(ax, items, title, ylabel="test CER (%)"):
-    for i, (label, rs, color) in enumerate(items):
-        m, s, v = ms(rs)
-        ax.bar(i, m, color=color, width=0.65)
-        ax.errorbar(i, m, s, color="black", capsize=3, lw=1)
-        ax.scatter(np.full(len(v), i) + np.linspace(-0.15, 0.15, len(v)), v, s=8, color="white",
-                   edgecolor="black", lw=0.5, zorder=3)
-        ax.text(i, m + s + 2, f"{m:.0f}", ha="center", fontsize=8)
-    ax.set_xticks(range(len(items)), [it[0] for it in items])
-    ax.set_ylabel(ylabel)
-    ax.set_title(title, loc="left")
-    ax.set_ylim(0, 105)
+def _bar(ax, x, vals, color, width, label=None):
+    m, s, v = msd(vals)
+    ax.bar(x, m, width, color=color, label=label, yerr=s if len(v) > 1 else None, capsize=2,
+           error_kw={"lw": 0.8})
+    return m
 
 
-def hero(groups):
-    fig, (a, b) = plt.subplots(1, 2, figsize=(11, 3.9), gridspec_kw={"width_ratios": [1.1, 1]})
-    items = [("shuffled\nlabels", groups["E1/neural/shuffled"], C_CTRL),
-             ("linear\nTD features", groups["E1/linear"], C_LIN),
-             ("conv +\ntransformer", groups["E1/neural"], C_NN)]
-    bars(a, items, "Silent EMG to text, closed vocabulary (100 test utterances)")
-    a.set_ylabel("character error rate (%)")
-    best = min(groups["E1/neural"], key=lambda r: abs(r["cer"] - np.median([q["cer"] for q in groups["E1/neural"]])))
+def hero(groups, cl):
+    fig, (a, b) = plt.subplots(1, 2, figsize=(12.5, 4.2), gridspec_kw={"width_ratios": [1, 1.1]})
+    nn = [x["grammar"] for x in groups.get("E1/neural", []) if "grammar" in x]
+    w = 0.26
+    for i, t in enumerate(TASKS):
+        r = cl["tasks"][t]
+        _bar(a, i - w, r["shuffled_logreg"], C_CTRL, w, "shuffled-label control (logreg)" if i == 0 else None)
+        _bar(a, i, r["cv_logreg"], C_LIN, w, "Hudgins features + logistic regression" if i == 0 else None)
+        if nn:
+            _bar(a, i + w, [x["slots_grammar"][t] for x in nn], C_NNG, w,
+                 "conv + transformer CTC, grammar decoding" if i == 0 else None)
+        a.plot([i - 1.6 * w, i + 1.6 * w], [100 * r["chance"]] * 2, color="black", lw=1, ls=":")
+    a.set_xticks(range(len(TASKS)), [TASK_LABEL[t] for t in TASKS])
+    a.set_ylabel("balanced accuracy (%)")
+    a.set_ylim(0, 105)
+    a.set_title("Which word was silently mouthed? (dotted: chance)", loc="left")
+    a.legend(frameon=False, fontsize=7.5, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3)
     b.axis("off")
-    b.set_title(f"Example test decodings (seed {best['seed']}, greedy, no language model)", loc="left")
-    rng = np.random.default_rng(3)
-    pick = rng.choice(len(best["refs"]), 8, replace=False)
-    b.text(0.0, 0.93, "prompt", weight="bold", transform=b.transAxes, family="monospace")
-    b.text(0.48, 0.93, "decoded from silent EMG", weight="bold", transform=b.transAxes, family="monospace")
-    for k, i in enumerate(pick):
-        y = 0.82 - k * 0.105
-        ref, hyp = best["refs"][i], best["hyps"][i]
-        b.text(0.0, y, ref, transform=b.transAxes, family="monospace")
-        b.text(0.48, y, hyp, transform=b.transAxes, family="monospace", color="#1b7837" if ref == hyp else "#b2182b")
+    if nn:
+        runs = groups["E1/neural"]
+        best = sorted(runs, key=lambda r: r["grammar"]["wer"])[len(runs) // 2]
+        b.set_title(f"Test prompts and decodings from silent EMG (median seed, grammar WER "
+                    f"{100 * best['grammar']['wer']:.0f}%)", loc="left")
+        pick = np.random.default_rng(3).choice(len(best["refs"]), 9, replace=False)
+        cols = [(0.0, "prompt (spoken form)"), (0.62, "decoded")]
+        for x0, h in cols:
+            b.text(x0, 0.95, h, weight="bold", transform=b.transAxes, fontsize=8)
+        for k, i in enumerate(pick):
+            y = 0.85 - k * 0.095
+            ref, hyp = best["refs"][i], best["grammar"]["hyps"][i]
+            b.text(0.0, y, ref, transform=b.transAxes, family="monospace", fontsize=7.5)
+            b.text(0.62, y, hyp, transform=b.transAxes, family="monospace", fontsize=7.5,
+                   color="#1b7837" if ref == hyp else "#b2182b")
     fig.tight_layout()
     fig.savefig(FIG / "hero.png")
 
 
 def results(groups):
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3.8), gridspec_kw={"width_ratios": [1.3, 1]})
-    items = [(l, groups[k], c) for l, k, c in [
-        ("random\nlinear", "E1/linear", C_LIN), ("random\nneural", "E1/neural", C_NN),
-        ("last block\nlinear", "E2/linear", C_LIN), ("last block\nneural", "E2/neural", C_NN),
-        ("voiced to\nsilent", "E3/neural/voiced_only", C_NN), ("shuffled\ncontrol", "E1/neural/shuffled", C_CTRL)]
-        if k in groups]
-    bars(axes[0], items, "Closed vocabulary (one session, 500 utterances)")
-    items = [(l, groups[k], c) for l, k, c in [
-        ("random utt.\nlinear", "E5/linear/random", C_LIN), ("random utt.\nneural", "E5/neural/random", C_NN),
-        ("held-out sess.\nlinear", "E5/linear/session", C_LIN), ("held-out sess.\nneural", "E5/neural/session", C_NN),
-        ("shuffled\ncontrol", "E5/neural/session/shuffled", C_CTRL)] if k in groups]
-    if items:
-        bars(axes[1], items, "Open vocabulary (7 sessions, test = session 5-11)")
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.0), gridspec_kw={"width_ratios": [1.6, 1]})
+    spec = [("shuffled\ncontrol", "E1/neural/shuffled"), ("linear\nTD", "E1/linear"), ("random\nsplit", "E1/neural"),
+            ("open-vocab\ninit", "E6/neural/pretrained"), ("last 100\nheld out", "E2/neural"),
+            ("trained on\nvocalised", "E3/neural/voiced_only")]
+    spec = [s for s in spec if s[1] in groups]
+    ax = axes[0]
+    for i, (lab, k) in enumerate(spec):
+        rs = groups[k]
+        _bar(ax, i - 0.18, [r["cer"] for r in rs], C_CTRL if "shuffled" in k else C_NN, 0.36,
+             "greedy" if i == 0 else None)
+        gr = [r["grammar"]["cer"] for r in rs if "grammar" in r]
+        if gr:
+            _bar(ax, i + 0.18, gr, C_NNG, 0.36, "grammar-constrained" if i == 1 else None)
+    ax.set_xticks(range(len(spec)), [s[0] for s in spec])
+    ax.set_ylabel("character error rate (%)")
+    ax.set_ylim(0, 105)
+    ax.legend(frameon=False)
+    ax.set_title("Closed vocabulary, 100 test utterances (one session)", loc="left")
+    ax = axes[1]
+    spec = [("random\nutterances", "E5/neural/random"), ("held-out\nsession", "E5/neural/session"),
+            ("shuffled\ncontrol", "E5/neural/session/shuffled")]
+    spec = [s for s in spec if s[1] in groups]
+    for i, (lab, k) in enumerate(spec):
+        rs = groups[k]
+        _bar(ax, i, [r["cer"] for r in rs], C_CTRL if "shuffled" in k else C_NN, 0.6)
+        for r in rs:
+            ax.scatter(i, 100 * r["cer"], s=10, color="black", zorder=3)
+    ax.set_xticks(range(len(spec)), [s[0] for s in spec])
+    ax.set_ylim(0, 105)
+    ax.set_ylabel("character error rate (%), greedy")
+    ax.set_title("Open vocabulary, 190 test sentences", loc="left")
     fig.tight_layout()
     fig.savefig(FIG / "results.png")
 
 
-def ablation(groups):
-    names = ["all", "no_throat", "face_only", "neck_only", "throat_only"] + [f"drop_{c}" for c in range(8)]
-    labels = {"all": "all 8", "no_throat": "without throat", "face_only": "face only (6)",
-              "neck_only": "neck only (under chin + throat)", "throat_only": "throat only"}
+def ablation(groups, cl):
+    names = ["all", "face_only", "neck_only", "throat_only"] + [f"drop_{c}" for c in range(8)]
+    labels = {"all": "all 8", "face_only": "face only (6)",
+              "neck_only": "neck only (under chin, throat)", "throat_only": "throat only"}
     labels |= {f"drop_{c}": f"without {CHANNEL_SHORT[c]}" for c in range(8)}
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.6), sharey=True)
-    for ax, model, color in ((axes[0], "linear", C_LIN), (axes[1], "neural", C_NN)):
-        ys, ms_, ss, ok = [], [], [], []
-        for n in names:
-            k = f"E1/{model}" if n == "all" else f"E4/{model}/{n}"
-            if k in groups:
-                m, s, _ = ms(groups[k]); ms_.append(m); ss.append(s); ok.append(n)
-        y = np.arange(len(ok))[::-1]
-        ax.barh(y, ms_, xerr=ss, color=[C_CTRL if n == "all" else color for n in ok], capsize=2)
-        ax.axvline(ms_[0], color="black", ls="--", lw=0.8)
-        ax.set_yticks(y, [labels[n] for n in ok])
-        ax.set_xlabel("test CER (%), retrained per electrode set")
-        ax.set_title(f"{'Linear TD features' if model == 'linear' else 'Conv + transformer'} "
-                     f"({len(groups.get(f'E1/{model}', []))}/{len(groups.get(f'E4/{model}/no_throat', []))} seeds)",
-                     loc="left")
-        ax.set_xlim(0, 100)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), gridspec_kw={"width_ratios": [1.6, 1]})
+    ax = axes[0]
+    y = np.arange(len(names))[::-1]
+    h = 0.2
+    cols = {"template": "#1b9e77", "ampm": "#d95f02", "weekday": "#7570b3", "month": "#e7298a"}
+    for j, t in enumerate(TASKS):
+        ms = [msd(cl["ablation"][n][t])[0] - 100 * cl["tasks"][t]["chance"] for n in names]
+        ax.barh(y + (1.5 - j) * h, ms, h, color=cols[t], label=t)
+    ax.set_yticks(y, [labels[n] for n in names])
+    ax.set_xlabel("balanced accuracy above chance (percentage points)")
+    ax.legend(frameon=False, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=4)
+    ax.set_title("Hudgins features + logistic regression (5x5-fold CV)", loc="left")
+    ax = axes[1]
+    spec = [("all 8", "E1/neural"), ("without throat", "E4/neural/no_throat"), ("face only (6)", "E4/neural/face_only"),
+            ("neck only (2)", "E4/neural/neck_only")]
+    spec = [s for s in spec if s[1] in groups]
+    for i, (lab, k) in enumerate(spec):
+        _bar(ax, i - 0.18, [r["cer"] for r in groups[k]], C_NN, 0.36, "greedy" if i == 0 else None)
+        gr = [r["grammar"]["cer"] for r in groups[k] if "grammar" in r]
+        if gr:
+            _bar(ax, i + 0.18, gr, C_NNG, 0.36, "grammar" if i == 0 else None)
+    ax.set_xticks(range(len(spec)), [s[0] for s in spec])
+    ax.set_ylabel("test CER (%), retrained per electrode set")
+    ax.set_ylim(0, 105)
+    ax.legend(frameon=False)
+    ax.set_title("Conv + transformer CTC", loc="left")
     fig.tight_layout()
     fig.savefig(FIG / "ablation.png")
 
 
-def confusion(groups):
-    syms = list("0123456789") + ["-"]
-    M = np.zeros((len(syms), len(syms)))
-    for r in groups["E1/neural"]:
-        for ref, hyp in zip(r["refs"], r["hyps"]):
-            for a, b in align(ref, hyp):
-                if a is not None and a.isdigit():
-                    M[syms.index(a), syms.index(b) if (b is not None and b.isdigit()) else -1] += 1
-    M = M[:-1]
-    P = M / M.sum(1, keepdims=True)
-    fig, ax = plt.subplots(figsize=(6, 5))
-    im = ax.imshow(P, cmap="Blues", vmin=0, vmax=1)
-    for i in range(P.shape[0]):
-        for j in range(P.shape[1]):
-            if P[i, j] >= 0.05:
-                ax.text(j, i, f"{P[i, j]:.2f}", ha="center", va="center", fontsize=7,
-                        color="white" if P[i, j] > 0.5 else "black")
-    ax.set_xticks(range(len(syms)), syms[:-1] + ["other /\ndeleted"])
-    ax.set_yticks(range(10), syms[:-1])
-    ax.set_xlabel("decoded character")
-    ax.set_ylabel("prompted digit")
-    ax.set_title(f"Digit confusion, conv + transformer, closed vocab\n(test set, {len(groups['E1/neural'])} seeds pooled, "
-                 f"{int(M.sum())} digits)", loc="left")
-    fig.colorbar(im, ax=ax, fraction=0.046, label="row-normalised rate")
+def confusion(cl):
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.2), gridspec_kw={"width_ratios": [1.35, 1]})
+    for ax, t, classes in ((axes[0], "month", MONTHS), (axes[1], "weekday", WEEKDAYS)):
+        r = cl["tasks"][t]
+        M = np.zeros((len(classes), len(classes)))
+        for a, b in zip(r["cv_true"], r["cv_logreg_pred"]):
+            M[classes.index(a), classes.index(b)] += 1
+        P = M / M.sum(1, keepdims=True)
+        ax.imshow(P, cmap="Blues", vmin=0, vmax=1)
+        for i in range(len(classes)):
+            for j in range(len(classes)):
+                if M[i, j]:
+                    ax.text(j, i, int(M[i, j]), ha="center", va="center", fontsize=7,
+                            color="white" if P[i, j] > 0.5 else "black")
+        short = [c[:3] for c in classes]
+        ax.set_xticks(range(len(classes)), short, rotation=0)
+        ax.set_yticks(range(len(classes)), short)
+        ax.set_xlabel("predicted")
+        ax.set_ylabel("prompted")
+        acc = np.trace(M) / M.sum()
+        ax.set_title(f"{t}: Hudgins + logreg, 5-fold CV (counts; accuracy {100 * acc:.0f}%, "
+                     f"chance {100 / len(classes):.0f}%)", loc="left", fontsize=8.5)
     fig.tight_layout()
-    fig.savefig(FIG / "confusion_digits.png")
-
-
-def curves(runs):
-    fig, ax = plt.subplots(figsize=(6, 3.5))
-    for r in runs:
-        if r["key"].startswith("E1/") and r["seed"] == 0:
-            h = r["history"]
-            c = C_CTRL if r["shuffled"] else (C_NN if r["model"] == "neural" else C_LIN)
-            ax.plot([x["epoch"] for x in h], [100 * x["val_cer"] for x in h], color=c,
-                    ls="--" if r["shuffled"] else "-", label=r["key"].replace("/s0", ""))
-    ax.set_xlabel("epoch"); ax.set_ylabel("validation CER (%)"); ax.legend(fontsize=7, frameon=False)
-    ax.set_title("Validation curves, closed vocabulary, seed 0", loc="left")
-    fig.tight_layout(); fig.savefig(FIG / "val_curves.png")
+    fig.savefig(FIG / "confusion.png")
 
 
 if __name__ == "__main__":
-    runs, groups = load()
-    summary(groups)
-    for f in (hero, results, ablation, confusion):
-        try:
-            f(groups)
-        except KeyError as e:
-            print(f"skip {f.__name__}: missing {e}")
-    curves(runs)
+    runs, groups, cl = load()
+    summary(groups, cl)
+    confusion(cl)
+    for f in (hero, results, ablation):
+        f(groups, cl) if f is not results else f(groups)

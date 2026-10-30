@@ -34,7 +34,7 @@ def test_linear_ctc_learns_synthetic_task():
 def test_neural_forward_shapes():
     m = ConvTransformerCTC(8, VOCAB_SIZE, d=32, layers=1, heads=2)
     out = m(torch.zeros(2, 1000, 8))
-    assert out.shape == (2, 125, VOCAB_SIZE)
+    assert out.shape == (2, 250, VOCAB_SIZE)  # input already at 500 Hz, x4 down
     assert LinearCTC(10, VOCAB_SIZE)(torch.zeros(2, 5, 10)).shape == (2, 5, VOCAB_SIZE)
 
 

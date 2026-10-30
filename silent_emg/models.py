@@ -50,14 +50,14 @@ class SinusoidalPE(nn.Module):
 
 
 class ConvTransformerCTC(nn.Module):
-    """Raw EMG (1000 Hz) -> 3 strided residual conv blocks (x8 down, 125 frames/s) -> Transformer -> CTC."""
+    """Raw EMG decimated to 500 Hz -> 3 residual conv blocks (x4 down, 125 frames/s) -> Transformer -> CTC."""
 
-    stride = 8
+    stride = 4
 
     def __init__(self, in_ch: int = 8, vocab: int = 38, d: int = 128, layers: int = 3, heads: int = 4,
                  dropout: float = 0.3):
         super().__init__()
-        self.conv = nn.Sequential(ResBlock(in_ch, d // 4, 2), ResBlock(d // 4, d // 2, 2), ResBlock(d // 2, d, 2))
+        self.conv = nn.Sequential(ResBlock(in_ch, d // 4, 2), ResBlock(d // 4, d // 2, 2), ResBlock(d // 2, d, 1))
         self.pe = SinusoidalPE(d)
         enc = nn.TransformerEncoderLayer(d, heads, 3 * d, dropout, batch_first=True,
                                          activation="gelu", norm_first=True)

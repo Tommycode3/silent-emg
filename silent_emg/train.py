@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy import signal
 
 from .features import stack_context, td_features
 from .models import ConvTransformerCTC, LinearCTC
@@ -43,7 +44,8 @@ def make_inputs(signals: list[np.ndarray], cfg: Config) -> list[np.ndarray]:
     sig = [s[:, cfg.channels] for s in signals]
     if cfg.model == "linear":
         return [stack_context(td_features(s), cfg.context) for s in sig]
-    return [s.astype(np.float32) for s in sig]
+    # anti-aliased, zero-phase decimation 1000 Hz -> 500 Hz (the raw-signal rate used by Gaddy & Klein is 516 Hz)
+    return [signal.decimate(s, 2, ftype="fir", axis=0, zero_phase=True).astype(np.float32) for s in sig]
 
 
 class Normaliser:
@@ -79,10 +81,10 @@ def _batch(xs, ys, idx, device, augment=False, rng=None):
 def _forward(model, X, lens):
     if isinstance(model, ConvTransformerCTC):
         out_lens = lens.clone()
-        for _ in range(3):
+        for _ in range(2):
             out_lens = (out_lens - 1) // 2 + 1
         T = X.shape[1]
-        for _ in range(3):
+        for _ in range(2):
             T = (T - 1) // 2 + 1
         mask = torch.arange(T)[None, :] >= out_lens[:, None]
         return model(X, mask.to(X.device)), out_lens
