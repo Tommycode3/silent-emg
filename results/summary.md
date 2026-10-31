@@ -5,11 +5,15 @@
 | closed vocab, random split | conv + transformer, shuffled labels (control) | 3 | 83.4 ± 7.5 | 103.5 ± 3.1 | 74.9 ± 1.7 | 96.2 ± 4.6 | 0.3 ± 0.6 |
 | closed vocab, random split | linear on TD features (Jou et al.) | 3 | 78.0 ± 2.6 | 110.0 ± 7.2 | 68.1 ± 2.7 | 92.2 ± 3.2 | 0.3 ± 0.6 |
 | closed vocab, random split | conv + transformer | 5 | 60.6 ± 3.0 | 99.5 ± 0.8 | 46.2 ± 4.4 | 70.0 ± 5.8 | 1.2 ± 1.1 |
+| closed vocab, random split | conv + transformer, initialised from open vocab | 3 | 54.9 ± 2.2 | 97.6 ± 0.4 | 47.6 ± 1.8 | 73.9 ± 3.4 | 1.3 ± 1.2 |
 | closed vocab, last 100 utterances held out | conv + transformer | 3 | 62.9 ± 1.6 | 100.5 ± 1.3 | 47.1 ± 4.2 | 72.7 ± 6.6 | 0.7 ± 1.2 |
 | train vocalised, test silent | conv + transformer | 3 | 81.7 ± 7.7 | 100.3 ± 0.6 | 69.8 ± 2.9 | 90.0 ± 2.2 | 0.3 ± 0.6 |
 | closed vocab, without throat electrode | conv + transformer | 3 | 55.1 ± 8.4 | 94.8 ± 4.5 | 44.6 ± 3.7 | 68.7 ± 5.3 | 0.3 ± 0.6 |
 | closed vocab, 6 face electrodes | conv + transformer | 3 | 55.3 ± 2.5 | 97.7 ± 1.5 | 47.0 ± 2.8 | 72.5 ± 3.4 | 1.3 ± 1.2 |
 | closed vocab, 2 neck electrodes | conv + transformer | 3 | 71.4 ± 5.2 | 100.9 ± 2.0 | 60.2 ± 1.7 | 84.4 ± 2.5 | 0.0 |
+| open vocab, random utterances | conv + transformer | 1 | 80.0 | 98.4 | n/a | n/a | n/a |
+| open vocab, held-out session | conv + transformer | 2 | 75.5 ± 0.0 | 98.7 ± 0.3 | n/a | n/a | n/a |
+| open vocab, held-out session | conv + transformer, shuffled labels (control) | 1 | 99.1 | 99.7 | n/a | n/a | n/a |
 
 ### Slot classification, balanced accuracy %
 
@@ -22,7 +26,7 @@
 
 Same 100 test utterances as the CTC models (E1 split):
 
-| task | logreg | GBM (5 seeds) | conv + transformer, greedy | conv + transformer, grammar |
+| task | logreg | GBM | conv + transformer, greedy | conv + transformer, grammar |
 |---|---|---|---|---|
 | template | 99.0 | 95.0 | 33.8 ± 0.9 | 91.7 ± 5.1 |
 | ampm | 85.6 | 79.3 | 12.2 ± 15.0 | 68.8 ± 6.7 |

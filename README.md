@@ -2,7 +2,7 @@
 
 ![hero](figures/hero.png)
 
-It reads silently mouthed dates and times ("monday june thirtieth", "eight eleven pm") from eight surface EMG electrodes on the face and neck, using the public recordings of one speaker by Gaddy & Klein (2020). On 100 held-out utterances, a small convolution + transformer CTC model with a date/time grammar has a 70% word error rate, against 96% for the same model trained on shuffled labels, and names the weekday in 59% of cases (balanced accuracy, chance 14%). A logistic regression on classic time-domain features does as well on the single-word questions (weekday 56% under cross-validation).
+It reads silently mouthed dates and times ("monday june thirtieth", "eight eleven pm") from eight surface EMG electrodes on the face and neck, using the public recordings of one speaker by Gaddy & Klein (2020). On 100 held-out utterances, a small convolution + transformer CTC model with a date/time grammar has a 70% word error rate, against 96% for the same model trained on shuffled labels, and names the weekday in 59% of cases (balanced accuracy, chance 14%). A logistic regression on classic time-domain features comes close on the single-word questions (weekday 56% under cross-validation).
 
 <!-- TODO(Tommaso): your own words on why -->
 
@@ -48,9 +48,9 @@ All numbers are on held-out test utterances, mean ± sample standard deviation o
 | conv + transformer, shuffled labels (control) | 3 | 83.4 ± 7.5 | 74.9 ± 1.7 | 96.2 ± 4.6 |
 | linear on Jou TD features | 3 | 78.0 ± 2.6 | 68.1 ± 2.7 | 92.2 ± 3.2 |
 | conv + transformer | 5 | 60.6 ± 3.0 | 46.2 ± 4.4 | 70.0 ± 5.8 |
-@@E6ROW@@
+| conv + transformer, initialised from the open-vocabulary model | 3 | 54.9 ± 2.2 | 47.6 ± 1.8 | 73.9 ± 3.4 |
 
-Greedy WER is about 100% for every model: without the grammar almost no word is spelled exactly right. With the grammar, the network recovers part of the prompt; under 2% of test sentences are fully correct.
+Greedy WER is about 100% for every model: without the grammar almost no word is spelled exactly right. With the grammar, the network recovers part of the prompt; under 2% of test sentences are fully correct. A single constant sentence already reaches 70% CER, so greedy CER alone says little; the grammar WER is the number to read. Initialising from the held-out-session open-vocabulary model below (seed 0) lowers greedy CER by about 6 points but does not change grammar WER.
 
 ![results](figures/results.png)
 
@@ -108,7 +108,13 @@ For silent articulation the face electrodes carry most of the information. Remov
 
 Sentences from books, 7 silent sessions with electrodes re-attached each time. Train on 5 sessions, validate on 5-10, test on 5-11 (190 sentences). Greedy decoding, no language model.
 
-@@E5TABLE@@
+| split | seeds | CER % | WER % |
+|---|---|---|---|
+| held-out session 5-11 | 2 | 75.5 ± 0.0 | 98.7 ± 0.3 |
+| random utterances, same sizes | 1 | 80.0 | 98.4 |
+| held-out session, shuffled labels (control) | 1 | 99.1 | 99.7 |
+
+On an unseen session the character error rate is 75%, against 99% for the control, so the EMG carries character-level information across an electrode re-attachment; word-level output is unusable without a language model. Mixing sessions at random did not help here (one seed, 80.0% versus 75.5%), so on this data I see no sign of a session leak inflating random-split scores; with one seed this is weak evidence either way. Seed 1 and the control used a smaller batch budget than seed 0 (32k instead of 64k samples per batch) after an out-of-memory error on the shared machine.
 
 ### Comparison with Gaddy & Klein (2020)
 
