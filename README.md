@@ -1,6 +1,6 @@
 # silent-emg: reading silently mouthed dates and times from face and neck muscles
 
-![hero](figures/hero.png)
+![Silent EMG decoding of dates and times: electrode sites, example signals and results](figures/hero.png)
 
 It reads silently mouthed dates and times ("monday june thirtieth", "eight eleven pm") from eight surface EMG electrodes on the face and neck, using the public recordings of one speaker by Gaddy & Klein (2020). On 100 held-out utterances, a small convolution + transformer CTC model with a date/time grammar has a 70% word error rate, against 96% for the same model trained on shuffled labels, and names the weekday in 59% of cases (balanced accuracy, chance 14%). A logistic regression on classic time-domain features comes close on the single-word questions (weekday 56% under cross-validation).
 
